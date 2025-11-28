@@ -2,6 +2,5 @@ services:
   - type: web
     name: arezzo-rag-chatbot
     env: python
-    runtime: "python-3.10"
-    buildCommand: "pip install -r requirements.txt"
+    buildCommand: "./build.sh"
     startCommand: "python app.py"
