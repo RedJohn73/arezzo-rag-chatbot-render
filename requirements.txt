@@ -1,0 +1,8 @@
+
+gradio==4.44.0
+huggingface_hub==0.23.4
+openai>=1.0.0
+python-dotenv
+requests
+beautifulsoup4
+numpy
