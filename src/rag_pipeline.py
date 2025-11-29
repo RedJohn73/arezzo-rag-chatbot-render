@@ -75,3 +75,55 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+# ============================================================
+# MONITOR PROGRESS PER GRADIO
+# ============================================================
+
+_progress = {
+    "percent": 0,
+    "step": "idle",
+    "ready": False
+}
+
+def update_progress(percent, step):
+    global _progress
+    _progress = {
+        "percent": int(percent),
+        "step": step,
+        "ready": False
+    }
+
+def mark_ready():
+    global _progress
+    _progress["percent"] = 100
+    _progress["step"] = "done"
+    _progress["ready"] = True
+
+def get_index_progress():
+    return _progress
+
+
+# ============================================================
+# BUILD INDEX SOLO SE MANCANTE
+# ============================================================
+
+def build_index_if_needed():
+    if index_exists():
+        mark_ready()
+        return
+
+    update_progress(0, "crawling")
+    pages = crawl_comune_arezzo()
+
+    update_progress(20, "chunking")
+    chunks = []
+    for p in pages:
+        for c in chunk_text(p["text"]):
+            chunks.append({"url": p["url"], "text": c})
+
+    update_progress(60, "embedding")
+    build_index(chunks)
+
+    update_progress(100, "saving")
+    mark_ready()
