@@ -8,11 +8,7 @@ os.environ["GRADIO_AUDIO_DEPENDENCIES"] = "0"
 import gradio as gr
 import threading
 
-from src.rag_pipeline import (
-    answer_question,
-    ensure_index_built_async,
-    get_progress,
-)
+from src.rag_query import answer_question
 
 # ============================================================
 # AVVIO INDICIZZAZIONE IN BACKGROUND
