@@ -1,6 +1,6 @@
-gradio==4.13.0
-openai
-beautifulsoup4
+gradio==4.19.2
+openai>=1.0.0
 requests
+beautifulsoup4
 python-dotenv
 numpy
