@@ -17,9 +17,11 @@ from .crawler import crawl_comune_arezzo
 
 load_dotenv()
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# percorso persistente su Render
+PERSISTENT_DIR = Path("/opt/render/project/data")
+PERSISTENT_DIR.mkdir(parents=True, exist_ok=True)
+
+DATA_DIR = PERSISTENT_DIR
 
 PAGES_JSON = DATA_DIR / "pages.json"
 EMBEDDINGS_NPY = DATA_DIR / "embeddings.npy"
