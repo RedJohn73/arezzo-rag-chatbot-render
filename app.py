@@ -1,6 +1,6 @@
 import os
 
-# Disabilita componenti Gradio che causano errori in produzione
+# Disabilita problemi noti di Gradio
 os.environ["GRADIO_DISABLE_ANALYTICS"] = "1"
 os.environ["GRADIO_AUDIO_DEPENDENCIES"] = "0"
 
@@ -8,40 +8,31 @@ import gradio as gr
 from src.rag_pipeline import answer_question, ensure_index_built_async, get_progress
 
 # ---------------------------------------------------------------------
-#  Avvio indicizzazione al primo load
+# Stato indicizzazione
 # ---------------------------------------------------------------------
 _index_started = False
 
 def start_index_if_needed():
     global _index_started
     if not _index_started:
-        print("[INFO] Starting index build via app.load() …")
+        print("[INFO] Starting index build…")
         _index_started = True
         ensure_index_built_async()
     return progress_status()
 
-
-# ---------------------------------------------------------------------
-#  Funzione Q&A
-# ---------------------------------------------------------------------
-def query_bot(user_input):
-    if not user_input.strip():
-        return "Inserisci una domanda."
-    return answer_question(user_input)
-
-
-# ---------------------------------------------------------------------
-#  Stato indicizzazione
-# ---------------------------------------------------------------------
 def progress_status():
     prog = get_progress()
     if prog["ready"]:
         return "Indice pronto ✔️"
     return f"🕗 Preparazione indice… {prog['percent']}%"
 
+def query_bot(user_input):
+    if not user_input.strip():
+        return "Inserisci una domanda."
+    return answer_question(user_input)
 
 # ---------------------------------------------------------------------
-#  UI Gradio
+# UI Gradio
 # ---------------------------------------------------------------------
 with gr.Blocks(title="Chatbot ARIA - Comune di Arezzo") as app:
 
@@ -55,17 +46,25 @@ with gr.Blocks(title="Chatbot ARIA - Comune di Arezzo") as app:
         ask_btn = gr.Button("Invia")
 
     answer = gr.Markdown("Risposta…")
-    status = gr.Markdown("🔄 Inizializzazione…")
+    status = gr.Markdown("🔄 Avvio…")
 
-    ask_btn.click(fn=query_bot, inputs=question, outputs=answer)
+    ask_btn.click(
+        fn=query_bot,
+        inputs=question,
+        outputs=answer,
+        queue=True      # 👈 NECESSARIO per funzioni bot lente/LLM
+    )
 
-    # 🚀 L'indice parte qui, senza queue
-    app.load(start_index_if_needed, inputs=None, outputs=status, every=3)
+    app.load(
+        fn=start_index_if_needed,
+        inputs=None,
+        outputs=status,
+        every=3,
+        queue=False      # 👈 IMPORTANTE: loader NON va in queue
+    )
 
-
-# ❌ Niente queue — gradio queueing è la causa del bug su Render
-# app.queue()
-
+# Attiva la queue solo per le chiamate degli utenti
+app.queue(concurrency_count=8, max_size=32)
 
 if __name__ == "__main__":
     app.launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", 7860)))
