@@ -4,3 +4,4 @@ beautifulsoup4
 requests
 python-dotenv
 numpy
+faiss-cpu==1.7.4
