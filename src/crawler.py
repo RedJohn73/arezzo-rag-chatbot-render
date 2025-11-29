@@ -4,88 +4,87 @@ import time
 
 BASE_URL = "https://www.comune.arezzo.it"
 
-def extract_text_from_drupal(html):
-    """Estrae contenuto testo dai layout Drupal (classi tipiche: .node, .content, .field)."""
-    soup = BeautifulSoup(html, "html.parser")
 
-    # Blocchi di testo comuni nelle installazioni Drupal
+def fetch(url):
+    """Scarica una singola pagina e restituisce {url, title, content}."""
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        print("[ERR] Request error:", url, e)
+        return None
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Titolo Drupal
+    title_tag = soup.find("h1")
+    title = title_tag.get_text(strip=True) if title_tag else ""
+
+    # Contenuto principale (Drupal: .node, .content, article)
     selectors = [
         ".node__content",
-        ".content",
-        ".field--name-body",
-        ".field__item",
-        ".block-content",
         "article",
-        ".paragraph",
-        ".text-formatted"
+        ".region-content",
     ]
 
-    texts = []
-
+    content = ""
     for sel in selectors:
-        for el in soup.select(sel):
-            t = el.get_text(separator=" ", strip=True)
-            if t and len(t) > 30:
-                texts.append(t)
+        block = soup.select_one(sel)
+        if block:
+            content = block.get_text(" ", strip=True)
+            break
 
-    # fallback assoluto
-    if not texts:
-        all_text = soup.get_text(separator=" ", strip=True)
-        return all_text
+    # Fallback
+    if not content:
+        content = soup.get_text(" ", strip=True)
 
-    return "\n\n".join(texts)
+    return {
+        "url": url,
+        "title": title,
+        "content": content
+    }
 
 
-def crawl_comune_arezzo(max_pages=2000):
-    """Crawl ricorsivo molto semplice per Drupal."""
+def crawl_comune_arezzo(max_pages=1500, delay=0.2):
+    """Crawling Drupal con gestione link e dedup."""
+    to_visit = {BASE_URL}
     visited = set()
-    to_visit = [BASE_URL]
     pages = []
 
+    session = requests.Session()
+
     while to_visit and len(pages) < max_pages:
-        url = to_visit.pop(0)
+        url = to_visit.pop()
 
         if url in visited:
             continue
         visited.add(url)
 
+        print(f"[CRAWL] {len(visited)} → {url}")
+
+        page = fetch(url)
+        if page:
+            pages.append(page)
+
+        # Trova nuovi link Drupal
         try:
-            r = requests.get(url, timeout=10)
-            if r.status_code != 200:
-                continue
-        except:
-            continue
+            resp = session.get(url, timeout=10)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
 
-        html = r.text
-        text = extract_text_from_drupal(html)
-
-        pages.append({
-            "url": url,
-            "text": text
-        })
-
-        # trova nuovi link Drupal
-        soup = BeautifulSoup(html, "html.parser")
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-
-            # Ignora link esterni
-            if href.startswith("http"):
-                if BASE_URL not in href:
+                # Manteniamo solo link interni Drupal
+                if href.startswith("/"):
+                    href = BASE_URL + href
+                if not href.startswith(BASE_URL):
                     continue
-                new_url = href
-            else:
-                new_url = BASE_URL + href
 
-            # Filtri molto utili
-            if any(x in new_url for x in [
-                ".pdf", ".jpg", ".png", ".zip", "login", "user"
-            ]):
-                continue
+                if href not in visited:
+                    to_visit.add(href)
 
-            if new_url not in visited and new_url not in to_visit:
-                to_visit.append(new_url)
+        except:
+            pass
 
-        time.sleep(0.3)
+        time.sleep(delay)
 
     return pages
