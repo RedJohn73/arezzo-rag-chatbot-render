@@ -3,8 +3,8 @@ import json
 import numpy as np
 import faiss
 from openai import OpenAI
-from .crawler import crawl_comune_arezzo
-from .chunker import chunk_text
+from src.crawler import crawl_comune_arezzo
+from src.chunker import chunk_text
 
 INDEX_DIR = "vectorstore"
 INDEX_FILE = os.path.join(INDEX_DIR, "faiss.index")
