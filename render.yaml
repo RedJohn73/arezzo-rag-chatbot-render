@@ -4,3 +4,5 @@ services:
     env: python
     buildCommand: "./build.sh"
     startCommand: "python app.py"
+    plan: standard
+    rootDir: .
