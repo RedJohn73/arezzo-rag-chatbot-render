@@ -1,79 +1,91 @@
-
-import time
-from urllib.parse import urljoin, urlparse
-
 import requests
 from bs4 import BeautifulSoup
+import time
+
+BASE_URL = "https://www.comune.arezzo.it"
+
+def extract_text_from_drupal(html):
+    """Estrae contenuto testo dai layout Drupal (classi tipiche: .node, .content, .field)."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Blocchi di testo comuni nelle installazioni Drupal
+    selectors = [
+        ".node__content",
+        ".content",
+        ".field--name-body",
+        ".field__item",
+        ".block-content",
+        "article",
+        ".paragraph",
+        ".text-formatted"
+    ]
+
+    texts = []
+
+    for sel in selectors:
+        for el in soup.select(sel):
+            t = el.get_text(separator=" ", strip=True)
+            if t and len(t) > 30:
+                texts.append(t)
+
+    # fallback assoluto
+    if not texts:
+        all_text = soup.get_text(separator=" ", strip=True)
+        return all_text
+
+    return "\n\n".join(texts)
 
 
-def crawl_comune_arezzo(
-    root_url: str = "https://www.comune.arezzo.it",
-    max_pages: int = 1500,
-    max_depth: int = 8,
-    delay_seconds: float = 0.15,
-):
-    """Crawling semplice del sito del Comune di Arezzo.
-
-    Raccoglie pagine HTML, estrae il testo principale da <p> e <li>.
-    Ritorna una lista di dict: {url, title, content}.
-    """
-    session = requests.Session()
-    session.headers = {"User-Agent": "ArezzoCrawlerBot/1.0"}
-
-    to_visit = [(root_url, 0)]
+def crawl_comune_arezzo(max_pages=2000):
+    """Crawl ricorsivo molto semplice per Drupal."""
     visited = set()
+    to_visit = [BASE_URL]
     pages = []
 
     while to_visit and len(pages) < max_pages:
-        url, depth = to_visit.pop(0)
+        url = to_visit.pop(0)
 
         if url in visited:
             continue
-        if depth > max_depth:
-            continue
-
         visited.add(url)
 
         try:
-            resp = session.get(url, timeout=10)
-            content_type = resp.headers.get("Content-Type", "")
-            if "text/html" not in content_type:
+            r = requests.get(url, timeout=10)
+            if r.status_code != 200:
                 continue
-        except Exception:
+        except:
             continue
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        html = r.text
+        text = extract_text_from_drupal(html)
 
-        title_tag = soup.find("title")
-        title = title_tag.get_text(strip=True) if title_tag else ""
+        pages.append({
+            "url": url,
+            "text": text
+        })
 
-        text_blocks = []
-        for tag in soup.find_all(["p", "li"]):
-            t = tag.get_text(" ", strip=True)
-            if t:
-                text_blocks.append(t)
-
-        content = "\n".join(text_blocks)
-
-        pages.append(
-            {
-                "url": url,
-                "title": title,
-                "content": content,
-            }
-        )
-
+        # trova nuovi link Drupal
+        soup = BeautifulSoup(html, "html.parser")
         for a in soup.find_all("a", href=True):
             href = a["href"]
-            absolute = urljoin(url, href)
 
-            parsed = urlparse(absolute)
-            if parsed.netloc and "comune.arezzo.it" not in parsed.netloc:
+            # Ignora link esterni
+            if href.startswith("http"):
+                if BASE_URL not in href:
+                    continue
+                new_url = href
+            else:
+                new_url = BASE_URL + href
+
+            # Filtri molto utili
+            if any(x in new_url for x in [
+                ".pdf", ".jpg", ".png", ".zip", "login", "user"
+            ]):
                 continue
 
-            if absolute not in visited:
-                to_visit.append((absolute, depth + 1))
+            if new_url not in visited and new_url not in to_visit:
+                to_visit.append(new_url)
 
-        time.sleep(delay_seconds)
+        time.sleep(0.3)
 
     return pages
