@@ -3,10 +3,8 @@ import json
 import numpy as np
 import faiss
 from openai import OpenAI
-
-# ✔️ import assoluti perché esegui 'python3 -m src.rag_pipeline'
-from src.crawler import crawl_comune_arezzo
-from src.chunker import chunk_text
+from .crawler import crawl_comune_arezzo
+from .chunker import chunk_text
 
 INDEX_DIR = "vectorstore"
 INDEX_FILE = os.path.join(INDEX_DIR, "faiss.index")
@@ -14,7 +12,7 @@ META_FILE = os.path.join(INDEX_DIR, "meta.json")
 
 EMBEDDING_MODEL = "text-embedding-3-large"
 
-client = OpenAI()  # prende OPENAI_API_KEY automaticamente
+client = OpenAI()  # prende OPENAI_API_KEY in automatico
 
 
 def build_index(pages):
@@ -33,6 +31,10 @@ def build_index(pages):
             continue
 
     vectors = np.array(vectors).astype("float32")
+
+    if len(vectors.shape) != 2:
+        print("[ERR] Errore embedding → vettori vuoti o malformati")
+        return
 
     dim = vectors.shape[1]
     index = faiss.IndexFlatL2(dim)
@@ -61,15 +63,15 @@ def main():
     print("=== ARIA RAG PIPELINE ===")
 
     if index_exists():
-        print("[INFO] Indice trovato. Fine.")
+        print("[INFO] Indice già esistente ✔")
         return
 
     print("[INFO] Nessun indice → avvio crawling...")
     pages_raw = crawl_comune_arezzo()
 
     print(f"[INFO] Crawling completato: {len(pages_raw)} pagine.")
-    pages_chunked = []
 
+    pages_chunked = []
     for p in pages_raw:
         chunks = chunk_text(p["text"])
         for c in chunks:
@@ -82,6 +84,9 @@ def main():
 
     print("Pronto.")
 
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
