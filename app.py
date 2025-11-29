@@ -7,45 +7,77 @@ os.environ["GRADIO_AUDIO_DEPENDENCIES"] = "0"
 
 import gradio as gr
 import threading
+import time
 
 from src.rag_query import answer_question
+from src.rag_pipeline import (
+    build_index_if_needed,
+    get_index_progress,
+)
 
 # ============================================================
 # AVVIO INDICIZZAZIONE IN BACKGROUND
 # ============================================================
 
 index_started = False
+index_ready = False
+
+def ensure_index_built_async():
+    """Richiama la pipeline solo una volta e costruisce l'indice FAISS."""
+    global index_ready
+    try:
+        build_index_if_needed()
+        index_ready = True
+    except Exception as e:
+        print("❌ Errore durante la costruzione indice:", e)
+        index_ready = False
+
 
 def start_index_once():
+    """Lanciato da app.load() senza bloccare Gradio."""
     global index_started
     if not index_started:
         index_started = True
         threading.Thread(target=ensure_index_built_async, daemon=True).start()
-    return progress_text()
 
-def progress_text():
-    prog = get_progress()
-    if prog["ready"]:
-        return "📗 Indice pronto ✔️"
-    return f"🟧 Preparazione indice… {prog['percent']}%  (step: {prog['step']})"
+    return progress_text()
 
 
 # ============================================================
-# FUNZIONE DI RISPOSTA
+# PROGRESS BAR
+# ============================================================
+
+def progress_text():
+    """Mostra stato percentuale e step dalla pipeline."""
+    prog = get_index_progress()
+
+    if prog["ready"]:
+        return "📗 Indice pronto ✔️"
+
+    percent = prog["percent"]
+    step = prog["step"]
+
+    return f"🟧 Preparazione indice… {percent}% (step: {step})"
+
+
+# ============================================================
+# FUNZIONE DI RISPOSTA RAG
 # ============================================================
 
 def handle_question(q: str):
     if not q.strip():
         return "Inserisci una domanda."
 
-    # Risposta RAG
+    if not index_ready:
+        return "⏳ L'indice è ancora in preparazione, attendi qualche istante…"
+
     try:
         res = answer_question(q)
 
-        # Non è un generatore → Grazie a questo check Gradio NON crasha
+        # Se fosse un generatore evitiamo crash
         if hasattr(res, "__iter__") and not isinstance(res, str):
             last = None
-            for x in res:
+            for x in res:  # Consuma il generatore
                 last = x
             return last or "Errore sconosciuto."
         return res
