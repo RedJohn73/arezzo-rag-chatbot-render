@@ -1,4 +1,3 @@
-
 import os
 import time
 import json
@@ -17,18 +16,17 @@ from .crawler import crawl_comune_arezzo
 
 load_dotenv()
 
-# percorso persistente su Render
-PERSISTENT_DIR = Path("/opt/render/project/data")
-PERSISTENT_DIR.mkdir(parents=True, exist_ok=True)
-
-DATA_DIR = PERSISTENT_DIR
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)   # <-- CREA AUTOMATICAMENTE /data
 
 PAGES_JSON = DATA_DIR / "pages.json"
 EMBEDDINGS_NPY = DATA_DIR / "embeddings.npy"
 META_JSON = DATA_DIR / "meta.json"
 LAST_CRAWL = DATA_DIR / "last_crawl.txt"
 
-CRAWL_INTERVAL_HOURS = 24
+# Ricostruzione indice ogni 12 ore
+CRAWL_INTERVAL_HOURS = 12
 
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 CHAT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -49,9 +47,8 @@ _progress = {
     "ready": False,
 }
 
-
 # ============================================================
-# GESTIONE PROGRESSO
+# PROGRESSO
 # ============================================================
 
 def get_progress() -> dict:
@@ -71,17 +68,22 @@ def _set_progress(step: str, current: int, total: int):
 
 
 # ============================================================
-# LOGICA DI RICOSTRUZIONE INDICE
+# LOGICA DI RICOSTRUZIONE DELL'INDICE
 # ============================================================
 
 def _should_rebuild() -> bool:
+    """Ritorna True se l’ultimo crawl è più vecchio di X ore."""
     if not LAST_CRAWL.exists():
         return True
+
     try:
         ts = float(LAST_CRAWL.read_text())
     except Exception:
         return True
+
     age_hours = (time.time() - ts) / 3600
+    print(f"[INFO] Età indice: {age_hours:.2f} ore")
+
     return age_hours >= CRAWL_INTERVAL_HOURS
 
 
@@ -90,7 +92,7 @@ def _chunk_text(text: str, max_chars: int = 1200, overlap: int = 150) -> List[st
     if not text:
         return []
 
-    chunks: List[str] = []
+    chunks = []
     i = 0
     n = len(text)
 
@@ -115,6 +117,7 @@ def _embed_chunks(chunks: List[str]) -> np.ndarray:
 
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
+
         try:
             resp = client.embeddings.create(
                 model=EMBED_MODEL,
@@ -130,13 +133,12 @@ def _embed_chunks(chunks: List[str]) -> np.ndarray:
         _set_progress("embedding", i + len(batch), len(chunks))
 
     arr = np.array(vectors, dtype="float32")
-    # normalizzazione
-    norms = np.linalg.norm(arr, axis=1, keepdims=True) + 1e-8
-    arr = arr / norms
+    arr /= (np.linalg.norm(arr, axis=1, keepdims=True) + 1e-8)
     return arr
 
 
 def _build_index():
+    """Esegue crawling + chunk + embedding + salvataggio."""
     global index_embeddings, index_meta
 
     print("[INFO] Avvio crawling...")
@@ -145,7 +147,7 @@ def _build_index():
     pages = crawl_comune_arezzo(
         max_pages=1200,
         max_depth=8,
-        delay_seconds=0.15,
+        delay_seconds=0.10,
     )
 
     _set_progress("crawling", 1, 1)
@@ -155,26 +157,25 @@ def _build_index():
 
     print(f"[INFO] Crawling completato: {len(pages)} pagine.")
 
-    chunks: list[str] = []
-    meta: list[dict[str, Any]] = []
+    chunks = []
+    meta = []
 
     total_pages = len(pages)
     _set_progress("chunking", 0, total_pages)
 
     for i, page in enumerate(pages):
-        content_chunks = _chunk_text(page.get("content", ""))
-        for ch in content_chunks:
+        text = page.get("content", "")
+        for ch in _chunk_text(text):
             chunks.append(ch)
-            meta.append(
-                {
-                    "url": page.get("url", ""),
-                    "title": page.get("title", ""),
-                    "snippet": ch[:250],
-                }
-            )
+            meta.append({
+                "url": page.get("url", ""),
+                "title": page.get("title", ""),
+                "snippet": ch[:250],
+            })
+
         _set_progress("chunking", i + 1, total_pages)
 
-    print(f"[INFO] Totale chunk generati: {len(chunks)}")
+    print(f"[INFO] Chunk generati: {len(chunks)}")
 
     embeddings = _embed_chunks(chunks)
 
@@ -192,70 +193,57 @@ def _build_index():
 
 
 def ensure_index_built_async():
-    """Da chiamare in un thread separato all'avvio dell'app.
-
-    - Se esiste già un indice recente, lo carica.
-    - Altrimenti esegue un crawl + rebuild completo.
-    """
+    """Usato da app.py — lancia in background il rebuild se necessario."""
     global index_embeddings, index_meta
 
     try:
-        if (
-            EMBEDDINGS_NPY.exists()
-            and META_JSON.exists()
-            and not _should_rebuild()
-        ):
-            print("[INFO] Carico indice esistente da disco...")
+        if EMBEDDINGS_NPY.exists() and META_JSON.exists() and not _should_rebuild():
+            print("[INFO] Carico indice esistente...")
             index_embeddings = np.load(EMBEDDINGS_NPY)
             with open(META_JSON, "r", encoding="utf-8") as f:
                 index_meta = json.load(f)
             _progress["ready"] = True
             return
 
-        print("[INFO] Ricostruzione completa dell'indice...")
+        print("[INFO] Ricostruzione indice necessaria.")
         _build_index()
 
     except Exception as e:
-        print("[ERR] Errore durante la costruzione dell'indice:", e)
+        print("[ERR] Errore ricostruzione indice:", e)
         _progress["ready"] = False
 
 
-def answer_question(question: str) -> str:
-    """Risponde a una domanda usando RAG sul sito del Comune di Arezzo."""
-    if not question or not question.strip():
-        return "Per favore inserisci una domanda valida."
+# ============================================================
+# RAG QUERY
+# ============================================================
 
-    if not _progress["ready"] or index_embeddings is None or index_meta is None:
-        prog = get_progress()
-        return (
-            f"⏳ Sto ancora preparando l'indice ("
-            f"{prog['percent']}% – step: {prog['step']}). "
-            "Riprova tra qualche istante."
-        )
+def answer_question(question: str) -> str:
+    if not question or not question.strip():
+        return "Inserisci una domanda valida."
+
+    if not _progress["ready"]:
+        p = get_progress()
+        return f"⏳ Indice non pronto ({p['percent']}% – step: {p['step']}). Riprova più tardi."
 
     q = question.strip()
 
-    # embedding della query
-    resp = client.embeddings.create(model=EMBED_MODEL, input=[q])
-    q_vec = resp.data[0].embedding
-    q_vec = np.array(q_vec, dtype="float32")
+    # embedding query
+    emb = client.embeddings.create(model=EMBED_MODEL, input=[q])
+    q_vec = np.array(emb.data[0].embedding, dtype="float32")
     q_vec /= (np.linalg.norm(q_vec) + 1e-8)
 
     sims = np.dot(index_embeddings, q_vec)
     top_k = 6
-    top_idx = np.argsort(-sims)[:top_k]
+    idxs = np.argsort(-sims)[:top_k]
 
     context_blocks = []
     urls = []
 
-    for idx in top_idx:
-        idx_int = int(idx)
-        entry = index_meta[idx_int]
-        urls.append(entry.get("url", ""))
+    for idx in idxs:
+        entry = index_meta[int(idx)]
+        urls.append(entry["url"])
         context_blocks.append(
-            f"TITOLO: {entry.get('title', '')}\n"
-            f"URL: {entry.get('url', '')}\n"
-            f"{entry.get('snippet', '')}"
+            f"TITOLO: {entry['title']}\nURL: {entry['url']}\n{entry['snippet']}"
         )
 
     context = "\n\n---\n\n".join(context_blocks)
@@ -263,11 +251,9 @@ def answer_question(question: str) -> str:
     messages = [
         {
             "role": "system",
-            "content": (
+            "content":
                 "Sei l'assistente istituzionale del Comune di Arezzo. "
-                "Rispondi in italiano, in modo chiaro e conciso, usando SOLO "
-                "le informazioni provenienti dai documenti forniti."
-            ),
+                "Usa SOLO le informazioni nel contesto fornito."
         },
         {"role": "system", "content": context},
         {"role": "user", "content": q},
@@ -280,7 +266,19 @@ def answer_question(question: str) -> str:
     )
 
     answer = completion.choices[0].message.content
-
     answer += "\n\nFonti:\n" + "\n".join(f"- {u}" for u in urls if u)
 
     return answer
+
+
+# ============================================================
+# ESECUZIONE LOCALE
+# ============================================================
+
+if __name__ == "__main__":
+    print("=== ARIA RAG PIPELINE ===")
+    print("Controllo indice...")
+
+    ensure_index_built_async()
+
+    print("Pronto.")
