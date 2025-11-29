@@ -7,10 +7,8 @@ os.environ["GRADIO_AUDIO_DEPENDENCIES"] = "0"
 import gradio as gr
 from src.rag_pipeline import answer_question, ensure_index_built_async, get_progress
 
-
 # ---------------------------------------------------------------------
-#  FIX: Lancia l’indicizzazione SOLO al primo load dell’interfaccia
-#       (Render garantisce che questa funzione venga eseguita)
+#  Avvio indicizzazione al primo load
 # ---------------------------------------------------------------------
 _index_started = False
 
@@ -24,7 +22,7 @@ def start_index_if_needed():
 
 
 # ---------------------------------------------------------------------
-#  Query bot
+#  Funzione Q&A
 # ---------------------------------------------------------------------
 def query_bot(user_input):
     if not user_input.strip():
@@ -33,7 +31,7 @@ def query_bot(user_input):
 
 
 # ---------------------------------------------------------------------
-#  Progress bar
+#  Stato indicizzazione
 # ---------------------------------------------------------------------
 def progress_status():
     prog = get_progress()
@@ -43,7 +41,7 @@ def progress_status():
 
 
 # ---------------------------------------------------------------------
-#  Interfaccia Gradio
+#  UI Gradio
 # ---------------------------------------------------------------------
 with gr.Blocks(title="Chatbot ARIA - Comune di Arezzo") as app:
 
@@ -61,14 +59,13 @@ with gr.Blocks(title="Chatbot ARIA - Comune di Arezzo") as app:
 
     ask_btn.click(fn=query_bot, inputs=question, outputs=answer)
 
-    # 🚀 Il crawler parte QUI — garantito da Render
+    # 🚀 L'indice parte qui, senza queue
     app.load(start_index_if_needed, inputs=None, outputs=status, every=3)
 
 
-app.queue()
+# ❌ Niente queue — gradio queueing è la causa del bug su Render
+# app.queue()
+
 
 if __name__ == "__main__":
     app.launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", 7860)))
-
-    app.launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", 7860)))
-
