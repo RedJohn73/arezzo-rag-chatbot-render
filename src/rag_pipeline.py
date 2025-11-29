@@ -3,40 +3,40 @@ import json
 import numpy as np
 import faiss
 from openai import OpenAI
-from src.crawler import crawl_comune_arezzo
-from src.chunker import chunk_text
+
+from .crawler import crawl_comune_arezzo
+from .chunker import chunk_text
 
 INDEX_DIR = "vectorstore"
 INDEX_FILE = os.path.join(INDEX_DIR, "faiss.index")
 META_FILE = os.path.join(INDEX_DIR, "meta.json")
 
-EMBEDDING_MODEL = "text-embedding-3-large"
+EMBED_MODEL = "text-embedding-3-large"
 
-client = OpenAI()  # prende OPENAI_API_KEY in automatico
+client = OpenAI()
 
 
-def build_index(pages):
-    texts = [p["text"] for p in pages]
+def build_index(chunks):
+    print("[INFO] Embedding chunks:", len(chunks))
 
     vectors = []
-    for t in texts:
+    meta = []
+
+    for c in chunks:
         try:
-            resp = client.embeddings.create(
-                model=EMBEDDING_MODEL,
-                input=t
+            r = client.embeddings.create(
+                model=EMBED_MODEL,
+                input=c["text"]
             )
-            vectors.append(resp.data[0].embedding)
+            vectors.append(r.data[0].embedding)
+            meta.append({"url": c["url"], "text": c["text"][:200]})
         except Exception as e:
-            print("[ERR] Embedding error:", e)
+            print("[ERR] embed:", e)
             continue
 
     vectors = np.array(vectors).astype("float32")
-
-    if len(vectors.shape) != 2:
-        print("[ERR] Errore embedding → vettori vuoti o malformati")
-        return
-
     dim = vectors.shape[1]
+
     index = faiss.IndexFlatL2(dim)
     index.add(vectors)
 
@@ -44,49 +44,34 @@ def build_index(pages):
     faiss.write_index(index, INDEX_FILE)
 
     with open(META_FILE, "w") as f:
-        json.dump(pages, f)
+        json.dump(meta, f)
 
     print("[OK] FAISS index saved.")
-
-
-def load_index():
-    if not os.path.exists(INDEX_FILE):
-        return None
-    return faiss.read_index(INDEX_FILE)
-
-
-def index_exists():
-    return os.path.exists(INDEX_FILE) and os.path.exists(META_FILE)
 
 
 def main():
     print("=== ARIA RAG PIPELINE ===")
 
-    if index_exists():
-        print("[INFO] Indice già esistente ✔")
+    if os.path.exists(INDEX_FILE):
+        print("[INFO] Indice già presente, fine.")
         return
 
-    print("[INFO] Nessun indice → avvio crawling...")
-    pages_raw = crawl_comune_arezzo()
+    print("[INFO] Nessun indice → crawling Drupal...")
+    pages = crawl_comune_arezzo()
 
-    print(f"[INFO] Crawling completato: {len(pages_raw)} pagine.")
+    print(f"[INFO] Crawling completato → {len(pages)} pagine.")
 
-    pages_chunked = []
-    for p in pages_raw:
-        chunks = chunk_text(p["text"])
-        for c in chunks:
-            pages_chunked.append({"url": p["url"], "text": c})
+    chunks = []
+    for p in pages:
+        parts = chunk_text(p["content"])
+        for c in parts:
+            chunks.append({"url": p["url"], "text": c})
 
-    print(f"[INFO] Chunk generati: {len(pages_chunked)}")
+    print(f"[INFO] Chunk generati: {len(chunks)}")
 
-    print("[INFO] Avvio creazione indice FAISS...")
-    build_index(pages_chunked)
-
+    build_index(chunks)
     print("Pronto.")
 
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
