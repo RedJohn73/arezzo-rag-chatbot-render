@@ -1,0 +1,10 @@
+{
+  "name": "arezzo-rag-chatbot",
+  "customizations": {
+    "codespaces": {
+      "secrets": {
+        "OPENAI_API_KEY": "OPENAI_API_KEY"
+      }
+    }
+  }
+}
