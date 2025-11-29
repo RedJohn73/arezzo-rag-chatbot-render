@@ -1,58 +1,50 @@
-
 import os
-import threading
+# 🔥 Fix critico: disattiva completamente l’audio in Gradio e impedisce il crash pyaudioop
+os.environ["GRADIO_DISABLE_ANALYTICS"] = "1"
+os.environ["GRADIO_AUDIO_DEPENDENCIES"] = "0"
 
 import gradio as gr
-from dotenv import load_dotenv
-
 from src.rag_pipeline import answer_question, ensure_index_built_async, get_progress
+import threading
 
-load_dotenv()
+# Avvia Indicizzazione in background
+def start_index():
+    try:
+        print("[INFO] Starting background index build…")
+        ensure_index_built_async()
+    except Exception as e:
+        print("[ERROR] Index build failed:", e)
 
-# Avvia la costruzione/aggiornamento dell'indice in background
-def start_background_indexer():
-    t = threading.Thread(target=ensure_index_built_async, daemon=True)
-    t.start()
+threading.Thread(target=start_index, daemon=True).start()
 
-with gr.Blocks(title="Chatbot ARIA - Comune di Arezzo") as demo:
-    gr.Markdown("# 🏛️ Chatbot ARIA – Comune di Arezzo")
-    gr.Markdown(
-        """Assistente istituzionale basato su:
-        - Crawling del sito ufficiale del Comune di Arezzo
-        - Indicizzazione RAG con OpenAI
-        """
-    )
+# Interfaccia Utente
+def query_bot(user_input):
+    if not user_input.strip():
+        return "Inserisci una domanda."
+    return answer_question(user_input)
+
+def progress_status():
+    prog = get_progress()
+    if prog["ready"]:
+        return "Indice pronto ✔️"
+    return f"Indicizzazione in corso… {prog['percent']}%"
+
+with gr.Blocks(title="Chatbot ARIA - Comune di Arezzo") as app:
+    gr.Markdown("# 🟦 ARIA – Assistente del Comune di Arezzo")
 
     with gr.Row():
-        status_box = gr.Textbox(
-            label="Stato indicizzazione",
-            interactive=False,
-            value="Inizializzazione..."
+        question = gr.Textbox(
+            label="Fai una domanda sul Comune di Arezzo",
+            placeholder="Es: Quali sono gli orari degli uffici comunali?",
         )
-        refresh_btn = gr.Button("🔄 Aggiorna stato")
+        ask_btn = gr.Button("Invia")
 
-    def ui_get_progress():
-        p = get_progress()
-        return f"{p['percent']}% – step: {p['step']} – pronto: {p['ready']}"
+    answer = gr.Markdown("Risposta…")
 
-    refresh_btn.click(fn=ui_get_progress, inputs=None, outputs=status_box)
+    status = gr.Markdown("📡 Stato: avvio in corso…")
 
-    chat_input = gr.Textbox(
-        label="Domanda",
-        placeholder="Scrivi una domanda sui servizi del Comune di Arezzo...",
-        lines=2,
-    )
-    chat_output = gr.Textbox(label="Risposta", lines=10)
-
-    def chat_fn(message):
-        return answer_question(message)
-
-    send_btn = gr.Button("Invia")
-    send_btn.click(fn=chat_fn, inputs=chat_input, outputs=chat_output)
-    chat_input.submit(fn=chat_fn, inputs=chat_input, outputs=chat_output)
+    ask_btn.click(fn=query_bot, inputs=question, outputs=answer)
+    app.load(fn=progress_status, inputs=None, outputs=status, every=3)
 
 if __name__ == "__main__":
-    # Avvia l'indicizzazione in background e poi il server Gradio
-    start_background_indexer()
-    port = int(os.environ.get("PORT", "7860"))
-    demo.launch(server_name="0.0.0.0", server_port=port)
+    app.launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", 7860)))
