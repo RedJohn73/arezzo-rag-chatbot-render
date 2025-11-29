@@ -3,16 +3,18 @@ import json
 import numpy as np
 import faiss
 from openai import OpenAI
-from .crawler import crawl_comune_arezzo
-from chunker import chunk_text
+
+# ✔️ import assoluti perché esegui 'python3 -m src.rag_pipeline'
+from src.crawler import crawl_comune_arezzo
+from src.chunker import chunk_text
 
 INDEX_DIR = "vectorstore"
 INDEX_FILE = os.path.join(INDEX_DIR, "faiss.index")
 META_FILE = os.path.join(INDEX_DIR, "meta.json")
 
-EMBEDDING_MODEL = "text-embedding-3-large"  # 🔥 modello valido
+EMBEDDING_MODEL = "text-embedding-3-large"
 
-client = OpenAI()  # 🔥 prende OPENAI_API_KEY automaticamente
+client = OpenAI()  # prende OPENAI_API_KEY automaticamente
 
 
 def build_index(pages):
