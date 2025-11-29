@@ -1,15 +1,14 @@
-def chunk_text(text, max_len=800):
-    words = text.split()
+def chunk_text(text, max_len=1200, overlap=150):
+    text = text.strip()
+    if not text:
+        return []
+
     chunks = []
-    current = []
+    start = 0
 
-    for w in words:
-        current.append(w)
-        if len(current) >= max_len:
-            chunks.append(" ".join(current))
-            current = []
-
-    if current:
-        chunks.append(" ".join(current))
+    while start < len(text):
+        end = start + max_len
+        chunks.append(text[start:end])
+        start = end - overlap
 
     return chunks
