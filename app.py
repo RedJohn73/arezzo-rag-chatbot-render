@@ -43,8 +43,11 @@ with gr.Blocks(title="Chatbot ARIA - Comune di Arezzo") as app:
 
     status = gr.Markdown("📡 Stato: avvio in corso…")
 
-    ask_btn.click(fn=query_bot, inputs=question, outputs=answer)
+        ask_btn.click(fn=query_bot, inputs=question, outputs=answer)
     app.load(fn=progress_status, inputs=None, outputs=status, every=3)
+
+app.queue()   # ⭐ NECESSARIO PER FUNZIONAMENTO SU GRADIO 3.x
 
 if __name__ == "__main__":
     app.launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", 7860)))
+
