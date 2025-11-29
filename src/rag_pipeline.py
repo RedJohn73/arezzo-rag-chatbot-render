@@ -3,7 +3,7 @@ import json
 import numpy as np
 import faiss
 from openai import OpenAI
-from crawler import crawl_comune_arezzo
+from .crawler import crawl_comune_arezzo
 from chunker import chunk_text
 
 INDEX_DIR = "vectorstore"
