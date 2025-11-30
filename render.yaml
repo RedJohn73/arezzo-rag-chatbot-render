@@ -1,8 +1,15 @@
 services:
   - type: web
-    name: arezzo-rag-chatbot
+    name: arezzo-rag-chatbot-render
     env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python app.py"
-    plan: standard
-    rootDir: .
+    plan: free
+    region: frankfurt
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.10
