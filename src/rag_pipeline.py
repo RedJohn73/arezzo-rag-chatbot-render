@@ -1,13 +1,13 @@
 import os
 import json
 import time
+import threading
 import numpy as np
 import faiss
-from openai import OpenAI
 
+from openai import OpenAI
 from .crawler import crawl_comune_arezzo
 from .chunker import chunk_text
-
 
 # ============================================================
 # CONFIG
@@ -16,105 +16,102 @@ from .chunker import chunk_text
 INDEX_DIR = "vectorstore"
 INDEX_FILE = os.path.join(INDEX_DIR, "faiss.index")
 META_FILE = os.path.join(INDEX_DIR, "meta.json")
-PROGRESS_FILE = os.path.join(INDEX_DIR, "progress.json")
+LAST_CRAWL = "data/last_crawl.txt"
 
-EMBEDDING_MODEL = "text-embedding-3-large"
-
+EMBED_MODEL = "text-embedding-3-large"
 client = OpenAI()
 
+# Stato interno per progress
+_progress = {
+    "percent": 0,
+    "step": "idle",
+    "ready": False
+}
+
 
 # ============================================================
-# UTILS
+# CHECK SE INDICE ESISTE
 # ============================================================
-
-def save_progress(step: str, percent: int, ready: bool):
-    os.makedirs(INDEX_DIR, exist_ok=True)
-    with open(PROGRESS_FILE, "w") as f:
-        json.dump({"step": step, "percent": percent, "ready": ready}, f)
-
-
-def get_progress():
-    if not os.path.exists(PROGRESS_FILE):
-        return {"step": "idle", "percent": 0, "ready": False}
-    return json.load(open(PROGRESS_FILE))
-
 
 def index_exists():
     return os.path.exists(INDEX_FILE) and os.path.exists(META_FILE)
 
 
+def get_progress():
+    return _progress
+
+
 # ============================================================
-# EMBEDDINGS
+# FUNZIONE EMBEDDING
 # ============================================================
 
-def embed_texts(chunks: list):
-    vectors = []
-
-    for i, t in enumerate(chunks):
-        try:
-            save_progress("embedding", int((i / len(chunks)) * 100), False)
-
-            resp = client.embeddings.create(
-                model=EMBEDDING_MODEL,
-                input=t
-            )
-            vectors.append(resp.data[0].embedding)
-
-        except Exception as e:
-            print("[ERR] embedding failed:", e)
-            continue
-
-    return np.array(vectors).astype("float32")
+def embed(text):
+    r = client.embeddings.create(model=EMBED_MODEL, input=text)
+    return np.array(r.data[0].embedding, dtype="float32")
 
 
 # ============================================================
 # COSTRUZIONE INDICE
 # ============================================================
 
+def build_index():
+    global _progress
+    _progress.update({"percent": 0, "step": "crawl", "ready": False})
+
+    pages_raw = crawl_comune_arezzo()
+    print(f"[INFO] Crawling completato: {len(pages_raw)} pagine.")
+
+    all_chunks = []
+    for p in pages_raw:
+        if "html" in p:
+            text = p["html"]
+        elif "text" in p:
+            text = p["text"]
+        else:
+            continue
+
+        for c in chunk_text(text):
+            all_chunks.append({"url": p["url"], "text": c})
+
+    print(f"[INFO] Chunk generati: {len(all_chunks)}")
+
+    _progress.update({"percent": 30, "step": "embeddings"})
+
+    vectors = []
+
+    for idx, chunk in enumerate(all_chunks):
+        try:
+            vec = embed(chunk["text"])
+            vectors.append(vec)
+        except Exception as e:
+            print("[ERR] embedding:", e)
+            continue
+
+        if idx % 50 == 0:
+            _progress["percent"] = 30 + int((idx / len(all_chunks)) * 60)
+
+    vectors = np.array(vectors, dtype="float32")
+    dim = vectors.shape[1]
+
+    index = faiss.IndexFlatL2(dim)
+    index.add(vectors)
+
+    os.makedirs(INDEX_DIR, exist_ok=True)
+    faiss.write_index(index, INDEX_FILE)
+    json.dump(all_chunks, open(META_FILE, "w"))
+
+    _progress.update({"percent": 100, "step": "done", "ready": True})
+    print("[OK] Indice FAISS salvato.")
+
+
+# ============================================================
+# COSTRUZIONE ASINCRONA (PER Render)
+# ============================================================
+
 def build_index_async():
-    """Funzione eseguita in thread separato."""
-    try:
-        save_progress("crawling", 0, False)
-        pages = crawl_comune_arezzo()
+    if index_exists():
+        _progress.update({"percent": 100, "step": "done", "ready": True})
+        return
 
-        print("[INFO] Crawling:", len(pages), "pagine")
-
-        # estrai testo da Drupal correttamente
-        save_progress("chunking", 10, False)
-        chunked = []
-        for p in pages:
-            text = p.get("text", "") or p.get("body", "")
-            if not text.strip():
-                continue
-            for c in chunk_text(text):
-                chunked.append({"url": p["url"], "text": c})
-
-        print("[INFO] Chunks:", len(chunked))
-
-        # vettori
-        save_progress("embedding", 20, False)
-        embeddings = embed_texts([c["text"] for c in chunked])
-
-        # indice FAISS
-        save_progress("faiss", 90, False)
-        dim = embeddings.shape[1]
-        index = faiss.IndexFlatL2(dim)
-        index.add(embeddings)
-
-        os.makedirs(INDEX_DIR, exist_ok=True)
-        faiss.write_index(index, INDEX_FILE)
-
-        with open(META_FILE, "w") as f:
-            json.dump(chunked, f)
-
-        save_progress("done", 100, True)
-        print("[OK] Index built.")
-
-    except Exception as e:
-        print("[FATAL] build_index_async:", e)
-        save_progress("error", 0, False)
-
-
-# ============================================================
-# END
-# ============================================================
+    print("[INFO] Avvio indicizzazione async...")
+    threading.Thread(target=build_index, daemon=True).start()
