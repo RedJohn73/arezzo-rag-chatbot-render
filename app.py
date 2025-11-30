@@ -7,43 +7,9 @@ os.environ["GRADIO_AUDIO_DEPENDENCIES"] = "0"
 
 import gradio as gr
 import threading
-import time
-import json
 
 from src.rag_query import answer_question
-from src.rag_pipeline import (
-    index_exists,
-    build_full_index_async,
-)
-
-# ============================================================
-# TRACKING DELLO STATO DI INDICIZZAZIONE
-# ============================================================
-
-PROGRESS_FILE = "data/last_crawl.txt"
-
-def get_progress():
-    """
-    Restituisce:
-    {
-        "percent": int,
-        "step": "idle" | "crawling" | "embedding" | ...
-        "ready": bool
-    }
-    """
-    if index_exists():
-        return {"percent": 100, "step": "done", "ready": True}
-
-    if not os.path.exists(PROGRESS_FILE):
-        return {"percent": 0, "step": "idle", "ready": False}
-
-    try:
-        with open(PROGRESS_FILE, "r") as f:
-            data = json.load(f)
-        return data
-    except:
-        return {"percent": 0, "step": "idle", "ready": False}
-
+from src.rag_pipeline import index_exists, build_index_async, get_progress
 
 # ============================================================
 # AVVIO INDICIZZAZIONE IN BACKGROUND
@@ -51,26 +17,26 @@ def get_progress():
 
 index_started = False
 
-def ensure_index_built_async():
-    """
-    Esegue il crawling + embeddings + FAISS in un thread separato,
-    aggiornando PROGRESS_FILE mano a mano.
-    """
-    build_full_index_async()   # 🔥 questa è la funzione ufficiale della pipeline
-
-
 def start_index_once():
+    """
+    Avvia la costruzione dell'indice solo la prima volta.
+    """
     global index_started
     if not index_started:
         index_started = True
-        threading.Thread(target=ensure_index_built_async, daemon=True).start()
+        threading.Thread(target=build_index_async, daemon=True).start()
     return progress_text()
 
 
 def progress_text():
+    """
+    Testo dello stato dell'indicizzazione per Gradio.
+    """
     prog = get_progress()
+
     if prog["ready"]:
         return "📗 Indice pronto ✔️"
+
     return f"🟧 Preparazione indice… {prog['percent']}%  (step: {prog['step']})"
 
 
@@ -84,7 +50,16 @@ def handle_question(q: str):
 
     try:
         res = answer_question(q)
+
+        # Se per sbaglio restituisce un generatore → prendiamo l'ultimo valore
+        if hasattr(res, "__iter__") and not isinstance(res, str):
+            last = None
+            for x in res:
+                last = x
+            return last or "Errore sconosciuto."
+
         return res
+
     except Exception as e:
         return f"❌ Errore interno: {e}"
 
@@ -110,7 +85,7 @@ with gr.Blocks(
     answer = gr.Markdown("Risposta…")
     status = gr.Markdown("⏳ Avvio…")
 
-    # Chatbot con queue attiva
+    # Bot: Queue ON
     send_button.click(
         fn=handle_question,
         inputs=question,
@@ -118,7 +93,7 @@ with gr.Blocks(
         queue=True,
     )
 
-    # Loader che non usa la queue
+    # Loader: Queue OFF
     app.load(
         fn=start_index_once,
         inputs=None,
@@ -130,4 +105,7 @@ with gr.Blocks(
 app.queue(concurrency_count=3)
 
 if __name__ == "__main__":
-    app.launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", 7860)))
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=int(os.getenv("PORT", 7860))
+    )
