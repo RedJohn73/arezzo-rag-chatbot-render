@@ -8,80 +8,83 @@ os.environ["GRADIO_AUDIO_DEPENDENCIES"] = "0"
 import gradio as gr
 import threading
 import time
+import json
 
 from src.rag_query import answer_question
 from src.rag_pipeline import (
-    build_index_if_needed,
-    get_index_progress,
+    index_exists,
+    build_full_index_async,
 )
+
+# ============================================================
+# TRACKING DELLO STATO DI INDICIZZAZIONE
+# ============================================================
+
+PROGRESS_FILE = "data/last_crawl.txt"
+
+def get_progress():
+    """
+    Restituisce:
+    {
+        "percent": int,
+        "step": "idle" | "crawling" | "embedding" | ...
+        "ready": bool
+    }
+    """
+    if index_exists():
+        return {"percent": 100, "step": "done", "ready": True}
+
+    if not os.path.exists(PROGRESS_FILE):
+        return {"percent": 0, "step": "idle", "ready": False}
+
+    try:
+        with open(PROGRESS_FILE, "r") as f:
+            data = json.load(f)
+        return data
+    except:
+        return {"percent": 0, "step": "idle", "ready": False}
+
 
 # ============================================================
 # AVVIO INDICIZZAZIONE IN BACKGROUND
 # ============================================================
 
 index_started = False
-index_ready = False
 
 def ensure_index_built_async():
-    """Richiama la pipeline solo una volta e costruisce l'indice FAISS."""
-    global index_ready
-    try:
-        build_index_if_needed()
-        index_ready = True
-    except Exception as e:
-        print("❌ Errore durante la costruzione indice:", e)
-        index_ready = False
+    """
+    Esegue il crawling + embeddings + FAISS in un thread separato,
+    aggiornando PROGRESS_FILE mano a mano.
+    """
+    build_full_index_async()   # 🔥 questa è la funzione ufficiale della pipeline
 
 
 def start_index_once():
-    """Lanciato da app.load() senza bloccare Gradio."""
     global index_started
     if not index_started:
         index_started = True
         threading.Thread(target=ensure_index_built_async, daemon=True).start()
-
     return progress_text()
 
 
-# ============================================================
-# PROGRESS BAR
-# ============================================================
-
 def progress_text():
-    """Mostra stato percentuale e step dalla pipeline."""
-    prog = get_index_progress()
-
+    prog = get_progress()
     if prog["ready"]:
         return "📗 Indice pronto ✔️"
-
-    percent = prog["percent"]
-    step = prog["step"]
-
-    return f"🟧 Preparazione indice… {percent}% (step: {step})"
+    return f"🟧 Preparazione indice… {prog['percent']}%  (step: {prog['step']})"
 
 
 # ============================================================
-# FUNZIONE DI RISPOSTA RAG
+# FUNZIONE DI RISPOSTA
 # ============================================================
 
 def handle_question(q: str):
     if not q.strip():
         return "Inserisci una domanda."
 
-    if not index_ready:
-        return "⏳ L'indice è ancora in preparazione, attendi qualche istante…"
-
     try:
         res = answer_question(q)
-
-        # Se fosse un generatore evitiamo crash
-        if hasattr(res, "__iter__") and not isinstance(res, str):
-            last = None
-            for x in res:  # Consuma il generatore
-                last = x
-            return last or "Errore sconosciuto."
         return res
-
     except Exception as e:
         return f"❌ Errore interno: {e}"
 
@@ -107,7 +110,7 @@ with gr.Blocks(
     answer = gr.Markdown("Risposta…")
     status = gr.Markdown("⏳ Avvio…")
 
-    # Bot: Queue ON (Fondamentale!)
+    # Chatbot con queue attiva
     send_button.click(
         fn=handle_question,
         inputs=question,
@@ -115,7 +118,7 @@ with gr.Blocks(
         queue=True,
     )
 
-    # Loader: Queue OFF
+    # Loader che non usa la queue
     app.load(
         fn=start_index_once,
         inputs=None,
@@ -124,9 +127,7 @@ with gr.Blocks(
         queue=False,
     )
 
-# Queue attiva solo per la chat
 app.queue(concurrency_count=3)
 
 if __name__ == "__main__":
-    app.launch(server_name="0.0.0.0",
-               server_port=int(os.getenv("PORT", 7860)))
+    app.launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", 7860)))
